@@ -1,0 +1,117 @@
+rm(list = ls())#clear any data in memory
+library(haven)
+library(dplyr)
+library(haven)
+library(stats)
+library(statmod)
+library(tweedie)
+library(labelled)
+library(foreign)
+library(purrr)
+library(ggplot2)
+library(e1071) 
+
+
+##analysis starts here
+df1 <- read_sav("C:/redd/paper3/tweedie_kheus_data/Rcodes2013/kheus2018/khheus_c1.sav")
+attach(df1)
+
+d2<-df1 %>% 
+  select(county,resid,clid,hhid,s_numb,wealth_index1,q3,q4,q5,q6b,q8,
+         q10,q11,q14,q15a,q15b,q15c,q15d,q15e,q15f,q15g,q15h,q15i,q36tot)%>% 
+  rename(county=county,res=resid,clNum=clid,hh=hhid,
+         vis_num=s_numb,wealthIndx=wealth_index1,rel_Head=q3,sex=q4,religion=q5,age=q6b,high_educ=q8,
+         mar_status=q10,empl_stats=q11,smoker=q14,hypert=q15a,cardiac=q15b,diabetes=q15c,
+         asthma=q15d,TB=q15e,other_respiratory=q15f,HIV=q15g,cancer=q15h,mental=q15i,total_cost=q36tot)
+
+data<-d2 %>% filter(s_numb==1)##filter to remain with 1 visit only
+
+##household head information
+f1<-data %>% group_by(clNum,hh)%>% filter(rel_Head==min(rel_Head))%>% filter(age==max(age))
+
+d4<-f1 %>% select(clNum,hh,sex,religion,age,high_educ,mar_status,empl_stats)
+head(d4)%>% as.data.frame()
+#Household information
+d5<-data %>% group_by(clNum,hh)%>% summarise(res=max(res),wlth_index=max(wealthIndx),
+                                             smoker=min(smoker),hypert=min(hypert),cardiac=min(cardiac),
+                                             diabetes=min(diabetes),asthma=min(asthma),TB=min(TB),
+                                             any_respiratiry=min(other_respiratory), HIV=min(HIV),
+                                             cancer=min(cancer), mental=min(mental),totSpend=sum(total_cost, na.rm = TRUE))
+d6<-d4 %>% left_join(d5,by=c("clNum","hh")) %>% as.data.frame()
+d7 =d6%>% filter(age>17)%>% filter(mar_status<5 )
+d8<-dplyr::select(d7, -clNum,-hh,-religion)
+
+##create variables 
+d8$high_educ1<-ifelse(d8$high_educ==8|d8$high_educ==9,0,
+                      ifelse(d8$high_educ==1|d8$high_educ==2|d8$high_educ==7,1,
+                             ifelse(d8$high_educ==3|d8$high_educ==6,2,3)))
+
+d8$empl_stats1<-ifelse(d8$empl_stats==1|d8$empl_stats==2,1,0)
+
+d9<-d8 %>% filter(smoker<3)%>% filter(hypert<3)%>% filter(cardiac<3)%>% 
+  filter(diabetes<3)%>% filter(asthma<3)%>% filter(TB<3)%>% 
+  filter(any_respiratiry<3)%>% filter(HIV<3)%>% filter(cancer<3)%>% filter(mental<3)
+d10<-dplyr::select(d9, -high_educ,-empl_stats)
+
+power2=tweedie.profile(totSpend~age+factor(wlth_index)+factor(mar_status)+factor(high_educ1),
+                       p.vec=seq(1.5,1.8,length=10),
+                        do.ci=TRUE, method="interpolation", data = d10)
+p1=power2$p.max
+power2$ci
+
+glmmodel1<-glm(totSpend~age+factor(mar_status)+factor(wlth_index)+factor(high_educ1),
+               family=tweedie(var.power=p1, link.power=0),x=TRUE, data=d10)
+
+fits1<-glmmodel1$fitted.values
+beta=glmmodel1$coefficients
+phi = power2$phi.max
+n=length(d10$totSpend)
+r1=glmmodel1$rank
+quasi<-sum((totSpend*fits1^(1-p1)/(1-p1))-((fits1^(2-p1))/(2-p1)))
+
+qicu<-(-2*quasi)+(2*r1)
+qicu
+
+# Finding a suitable link function
+glmmodel<-glm(totSpend~age+factor(wlth_index)+factor(mar_status)+factor(high_educ1),
+              family=tweedie(var.power=p1, link.power=0),x=TRUE, data=d10)
+
+glmmodel.other<-glm(totSpend~age+factor(wlth_index)+factor(mar_status)+factor(high_educ1),
+                    family=tweedie(var.power=p1),x=TRUE, data = d10) # Canonical
+#Deviances
+glmmodel$deviance
+glmmodel.other$deviance
+#Df Residuals
+glmmodel$df.residual
+glmmodel.other$df.residual
+
+dk1<-data %>% group_by(age) %>% summarise(tt_cost=mean(total_cost,na.rm = TRUE))
+
+dk2<-d10 %>% group_by(age) %>% summarise(tt_cost=mean(totSpend,na.rm = TRUE),n=n())%>%as.data.frame()
+dk3<-dk2 %>% filter(age<97)
+
+ggplot(dk2) + 
+  geom_line(
+    mapping = aes(x = age, y = tt_cost)
+  )
+dk3$x<-dk3$age
+dk3$y<-dk3$tt_cost
+plot(dk3$x, dk3$y, type = "l", lty = 1, xlab="Age in Years of Household Head", ylab = "Mean Cost for Outpatient Care per Household")
+lines(dk3$x, dk3$y, type = "l", lty = 1)
+
+
+sd(d10$totSpend)
+mean(d10$totSpend)
+median(d10$totSpend)
+skewness(d10$totSpend) 
+max(d10$totSpend)
+min(d10$totSpend)
+
+d11<-d10 %>% filter(totSpend>0)
+sd(d11$totSpend)
+mean(d11$totSpend)
+median(d11$totSpend)
+skewness(d11$totSpend) 
+max(d11$totSpend)
+min(d11$totSpend) 
+
